@@ -81,7 +81,7 @@ def test_register_chat_and_logout(root, server_address, connect):
     app.open_conversation(USER, "carol")
     app.text_var.set("anyone there?")
     app.send_message()
-    assert pump(root, lambda: "carol is offline" in chat_text(app))
+    assert pump(root, lambda: "carol is offline — your message was saved" in chat_text(app))
 
     app.logout()
     assert pump(root, lambda: app.login_frame.winfo_manager() == "pack")

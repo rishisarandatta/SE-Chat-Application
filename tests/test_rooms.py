@@ -113,7 +113,7 @@ def test_room_message_with_no_one_else_online(connect):
     alice = connect().sign_in("alice")
     create(alice, "general")
     ack = alice.reply_to(say(alice, "general", "anyone?"))
-    assert ack["status"] == "NOT_DELIVERED"
+    assert ack["status"] == "STORED_NOT_DELIVERED"
     assert ack["data"]["reason"] == "no one else in general is online"
 
 
@@ -184,4 +184,4 @@ def test_disconnected_member_is_skipped(connect):
     join(bob, "general")
     bob.close()
     assert alice.next_event("presence")["data"]["status"] == "offline"
-    assert alice.reply_to(say(alice, "general", "still there?"))["status"] == "NOT_DELIVERED"
+    assert alice.reply_to(say(alice, "general", "still there?"))["status"] == "STORED_NOT_DELIVERED"

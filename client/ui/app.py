@@ -54,7 +54,8 @@ class ChatApp:
         self.last_seq = {}            # (conversation, sender) -> last seq seen (CHAT-F-008)
         self.online = set()
         self.rooms = {}               # room name -> {"joined": bool, "members": int, "status": str}
-        self.lines = {}               # conversation -> [(text, tag, meta)]
+        self.lines = {}               # conversation -> [(text, tag, meta, key)]; key = (sender, ts)
+        self.history_requested = set()
         self.unread = set()
         self.current = None           # (ROOM, name) or (USER, name)
         self._room_names = []         # what each sidebar row shows, in order
@@ -256,13 +257,23 @@ class ChatApp:
         self._refresh_sidebar()
         if kind == ROOM and not self.rooms.get(name, {}).get("joined"):
             self.add_line(f"You are not in #{name}. Click Join to take part.", "system")
+        else:
+            self._load_history(self.current)
         self.message_entry.focus_set()
+
+    def _load_history(self, conversation):
+        """Ask for a conversation's saved messages the first time it is opened (CHAT-F-012)."""
+        if conversation in self.history_requested:
+            return
+        kind, name = conversation
+        if self._request("HISTORY", {kind if kind == ROOM else "with": name}):
+            self.history_requested.add(conversation)
 
     def _render(self):
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
-        for text, tag, meta in self.lines.get(self.current, []):
+        for text, tag, meta, _ in self.lines.get(self.current, []):
             self._insert(text, tag, meta)
 
     def _insert(self, text, tag, meta):
@@ -273,10 +284,10 @@ class ChatApp:
         self.log.configure(state="disabled")
         self.log.see("end")
 
-    def add_line(self, text, tag, meta=None, conversation=None):
+    def add_line(self, text, tag, meta=None, conversation=None, key=None):
         """Add a line to a conversation (the current one by default), showing it if it is open."""
         conversation = conversation or self.current
-        self.lines.setdefault(conversation, []).append((text, tag, meta))
+        self.lines.setdefault(conversation, []).append((text, tag, meta, key))
         if conversation == self.current:
             self._insert(text, tag, meta)
         elif conversation is not None and tag in ("them", "warning"):
@@ -388,6 +399,7 @@ class ChatApp:
         self.online.clear()
         self.rooms.clear()
         self.lines.clear()
+        self.history_requested.clear()
         self.unread.clear()
         self.last_seq.clear()
         self.current = None
@@ -467,9 +479,12 @@ class ChatApp:
             info.update(joined=False, members=max(0, info["members"] - 1))
             self.add_line(f"You left #{name}.", "system", conversation=(ROOM, name))
             self._refresh_sidebar()
-        elif request_type == "MSG" and status == "NOT_DELIVERED":
+        elif request_type == "HISTORY":
+            self._show_history(data)
+        elif request_type == "MSG" and status == "STORED_NOT_DELIVERED":
             target = (ROOM, data["room"]) if "room" in data else (USER, data.get("to"))
-            self.add_line(f"{data.get('reason')} — your message was not delivered.", "warning", conversation=target)
+            self.add_line(f"{data.get('reason')} — your message was saved and will be in the history.",
+                          "warning", conversation=target)
 
     def _handle_error(self, message, request_type):
         text = describe_error(message)
@@ -506,6 +521,21 @@ class ChatApp:
             self.add_line(f"{user} {verb} the room.", "system", conversation=(ROOM, name))
             self._refresh_sidebar()
 
+    def _show_history(self, data):
+        conversation = (ROOM, data["room"]) if "room" in data else (USER, data["with"])
+        saved = []
+        for m in data.get("messages", []):
+            mine = m["from"] == self.username
+            meta = f"{'You' if mine else m['from']}  {clock(m['ts'])}"
+            saved.append((m["text"], "me" if mine else "them", meta, (m["from"], m["ts"])))
+        if not saved:
+            return
+        keys = {line[3] for line in saved}
+        newer = [line for line in self.lines.get(conversation, []) if line[3] is None or line[3] not in keys]
+        self.lines[conversation] = saved + newer
+        if conversation == self.current:
+            self._render()
+
     def _show_incoming(self, data):
         sender, seq = data.get("from"), data.get("seq")
         conversation = (ROOM, data["room"]) if "room" in data else (USER, sender)
@@ -517,5 +547,5 @@ class ChatApp:
             self.last_seq[key] = seq
         if self.current is None:
             self.open_conversation(*conversation)
-        self.add_line(data.get("text", ""), "them",
-                      meta=f"{sender}  {clock(data.get('ts', time.time()))}", conversation=conversation)
+        self.add_line(data.get("text", ""), "them", meta=f"{sender}  {clock(data.get('ts', time.time()))}",
+                      conversation=conversation, key=(sender, data.get("ts")))

@@ -26,6 +26,7 @@ class Dispatcher:
             "CREATE_ROOM": self._create_room,
             "JOIN": self._join,
             "LEAVE": self._leave,
+            "HISTORY": self._history,
         }
 
     def handle(self, conn, message):
@@ -93,6 +94,9 @@ class Dispatcher:
 
     def _msg(self, conn, request):
         conn.send(self.router.route(conn, request))
+
+    def _history(self, conn, request):
+        conn.send(self.router.history(conn.user, request))
 
     def _create_room(self, conn, request):
         try:
