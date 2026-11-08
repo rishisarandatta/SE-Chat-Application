@@ -164,3 +164,24 @@ def test_rooms_presence_and_unread_markers(root, server_address, connect):
     assert pump(root, lambda: "bob" not in app.online)
     app.open_conversation(USER, "bob")
     assert "bob is now offline." in chat_text(app)
+
+
+def test_history_loads_when_a_conversation_opens(root, server_address, connect):
+    alice_raw = connect().sign_in("alice")
+    alice_raw.close()
+    bob = connect().sign_in("bob")
+    bob.reply_to(bob.request("MSG", {"to": "alice", "text": "sent while you were away"}))
+
+    app = make_app(root, server_address, "alice")
+    app.login()
+    assert pump(root, lambda: app.username == "alice")
+    app.open_conversation(USER, "bob")
+    assert pump(root, lambda: "sent while you were away" in chat_text(app))
+
+    # A live message is not duplicated by a second history load.
+    bob.request("MSG", {"to": "alice", "text": "and now live"})
+    assert pump(root, lambda: "and now live" in chat_text(app))
+    app.open_conversation(USER, "bob")
+    root.update()
+    assert chat_text(app).count("sent while you were away") == 1
+    assert chat_text(app).count("and now live") == 1
