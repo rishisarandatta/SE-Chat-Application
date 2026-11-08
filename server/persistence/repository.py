@@ -211,3 +211,54 @@ class Repository:
                    ORDER BY m.Timestamp DESC, m.MessageID DESC LIMIT ?""",
                 (user_id, other_id, other_id, user_id, before_ts, limit)).fetchall()
         return [dict(r) for r in reversed(rows)]
+
+    # ----- administration and audit (#10) -----
+
+    def set_user_status(self, user_id, status):
+        with self._lock:
+            self._db.execute("UPDATE User SET Status = ? WHERE UserID = ?", (status, user_id))
+
+    def set_user_role(self, username, role):
+        """Returns False if there is no such user."""
+        with self._lock:
+            cur = self._db.execute("UPDATE User SET Role = ? WHERE Username = ?", (role, username))
+        return cur.rowcount == 1
+
+    def set_room_status(self, room_id, status):
+        with self._lock:
+            self._db.execute("UPDATE ChatRoom SET Status = ? WHERE RoomID = ?", (status, room_id))
+
+    def rename_room(self, room_id, new_name):
+        try:
+            with self._lock:
+                self._db.execute("UPDATE ChatRoom SET RoomName = ? WHERE RoomID = ?", (new_name, room_id))
+        except sqlite3.IntegrityError as e:
+            raise DuplicateError(new_name) from e
+
+    def remove_room(self, room_id):
+        """Mark a room removed and drop its members, in one transaction. Messages are kept."""
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute("UPDATE ChatRoom SET Status = 'REMOVED' WHERE RoomID = ?", (room_id,))
+                self._db.execute("DELETE FROM RoomMember WHERE RoomID = ?", (room_id,))
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def add_audit(self, user_id, action, entity, outcome):
+        """Queue an audit record for the writer thread."""
+        self._writes.put((
+            "INSERT INTO AuditLog (UserID, Action, Entity, Outcome, Timestamp) VALUES (?, ?, ?, ?, ?)",
+            (user_id, action, entity, outcome, now())))
+
+    def audit_entries(self, limit=100):
+        """The most recent audit records, newest last."""
+        self.flush()
+        with self._lock:
+            rows = self._db.execute(
+                """SELECT a.AuditID, u.Username, a.Action, a.Entity, a.Outcome, a.Timestamp
+                   FROM AuditLog a LEFT JOIN User u ON u.UserID = a.UserID
+                   ORDER BY a.AuditID DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(r) for r in reversed(rows)]

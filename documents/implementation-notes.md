@@ -13,7 +13,7 @@ This file tracks those differences. Update it whenever the code and the SAD disa
 | Session idle timeout and sweeper | The token is checked on every request; idle expiry is not enforced yet. | #11 |
 | Chat rooms, presence events, join/leave notifications | Done in Sprint 2. | #8 |
 | Message persistence and history | Done in Sprint 2. | #9 |
-| Admin service and audit log with redaction | Security events go to the rotating server log; passwords and tokens are never written. | #10 |
+| Admin service and audit log with redaction | Done in Sprint 2. | #10 |
 
 ### Differences from the SAD
 | # | SAD says | Implementation | Why |
@@ -38,6 +38,9 @@ This file tracks those differences. Update it whenever the code and the SAD disa
 | D12 | Room Status OPEN / RESTRICTED / REMOVED | RESTRICTED rooms are read-only and closed to new members for everyone except administrators. REMOVED rooms behave as if they do not exist. | The SAD names the states without defining them. |
 | D13 | Not specified | A room creator becomes its first member. A server holds at most `max_rooms` rooms; the next `CREATE_ROOM` gets `FORBIDDEN`. Room names are unique ignoring case. | Matches the `max_rooms` setting and the username rule (D6). |
 | D14 | HISTORY: `room or with, before_ts, limit` | As in the SAD. `limit` defaults to 50 (maximum 100), `before_ts` defaults to now, and the reply has `more: true` when older messages may exist. Room history needs current membership; a direct conversation can only be read by its two participants. | The SAD lists the fields but not the defaults or the permission rule. |
+| D15 | Not specified how an account becomes an administrator | `python -m server.manage make-admin <username>`, run on the server machine. There is no network request that grants the role. | A client must never be able to make itself an administrator (CHAT-SR-003). |
+| D16 | ADMIN: `action, target, args` | Actions: `activate`, `deactivate`, `restrict` (target is a username); `open_room`, `restrict_room`, `remove_room`, `rename_room` with `args.name` (target is a room). Reply `ACK DONE {action, target, ...}`. Admins cannot change their own account. Deactivated or restricted users who are online get `EVENT account {status}` and are disconnected. | The SAD lists the request fields but not the actions. |
+| D17 | AuditLog insert-only | Enforced by database triggers that reject UPDATE and DELETE on AuditLog. Records are written by the background writer thread, like messages. Log files get a redaction filter for passwords and session tokens, and on Linux/macOS are created readable by the server account only (umask 077). Windows has no equivalent permission bits, so there the folder's own permissions apply. | Makes "insert-only" a database guarantee, not just a convention. |
 
 ## Protocol summary (as implemented)
 Every frame is a 4-byte big-endian length followed by a UTF-8 JSON object, at most `max_frame_bytes`.
@@ -53,6 +56,7 @@ Client requests: `{"type", "seq", "payload", "session"}`. `session` is required 
 | `CREATE_ROOM` | `room` | `ACK CREATED {room, members}` |
 | `JOIN` | `room` | `ACK JOINED {room, members}` |
 | `LEAVE` | `room` | `ACK LEFT {room}` |
+| `ADMIN` | `action`, `target`, optional `args` | `ACK DONE {action, target, status or name}`; `FORBIDDEN` for non-administrators |
 | `HISTORY` | `room` or `with`, optional `before_ts`, `limit` | `ACK HISTORY {room or with, messages: [{id, from, to or room, text, ts}], more}` (oldest first) |
 | `LOGOUT` | none | `ACK LOGGED_OUT`, then the server closes the connection |
 | `PING` | none | `PONG` |
@@ -64,4 +68,6 @@ Other events:
 - `presence {user, status: online|offline}` goes to everyone online.
 - `room {action: created, room}` goes to everyone online.
 - `join {room, user}` and `leave {room, user}` go to the room's other online members.
+- `room {action: restricted|opened|removed, room}` and `room {action: renamed, room, name}` go to everyone online.
+- `account {status, reason}` goes to a user an administrator has just deactivated or restricted, before they are disconnected.
 Errors are `ERROR {ref_seq, code, reason}` with the codes from the SAD.

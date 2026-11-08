@@ -26,6 +26,9 @@ FRIENDLY_ERRORS = {
 
 ROOM, USER = "room", "user"
 
+ADMIN_HELP = ("Admin commands: /admin activate|deactivate|restrict <user>, "
+              "/admin open_room|restrict_room|remove_room <room>, /admin rename_room <room> <new name>")
+
 
 def describe_error(message):
     """Turn an ERROR message into text for the user, without exposing server internals."""
@@ -48,6 +51,7 @@ class ChatApp:
         self.conn = None
         self.events = queue.Queue()
         self.username = None
+        self.role = None
         self.on_connected = None      # what to send once the connect worker succeeds
         self.pending_login = None     # credentials to log in with after REGISTER succeeds
         self.logging_out = False
@@ -363,6 +367,9 @@ class ChatApp:
         text = self.text_var.get()
         if not text.strip():
             return
+        if text.startswith("/admin"):
+            self._admin_command(text)
+            return
         if self.current is None:
             self.add_line("Pick a room or a person on the left first.", "warning")
             return
@@ -374,6 +381,18 @@ class ChatApp:
             return
         self.text_var.set("")
         self.add_line(text, "me", meta=f"You  {clock(time.time())}")
+
+    def _admin_command(self, text):
+        """/admin <action> <target> [new name] -> ADMIN request (CHAT-F-015, CHAT-F-016)."""
+        parts = text.split(maxsplit=3)
+        if len(parts) < 3:
+            self.add_line(ADMIN_HELP, "system")
+            return
+        payload = {"action": parts[1], "target": parts[2]}
+        if len(parts) == 4:
+            payload["args"] = {"name": parts[3]}
+        if self._request("ADMIN", payload):
+            self.text_var.set("")
 
     def logout(self):
         if self.conn is None or not self.conn.connected:
@@ -395,6 +414,7 @@ class ChatApp:
             self.conn.close()
             self.conn = None
         self.username = None
+        self.role = None
         self.logging_out = False
         self.online.clear()
         self.rooms.clear()
@@ -461,7 +481,9 @@ class ChatApp:
             self.online = set(data.get("online", []))
             self.rooms = {r["name"]: {"joined": r["joined"], "members": r["members"], "status": r["status"]}
                           for r in data.get("rooms", [])}
-            self.set_status(f"Connected as {self.username}", "connected")
+            self.role = data.get("role")
+            suffix = " (administrator)" if self.role == "ADMIN" else ""
+            self.set_status(f"Connected as {self.username}{suffix}", "connected")
             self.show_chat()
             self._refresh_sidebar()
         elif request_type == "LOGOUT":
@@ -479,6 +501,8 @@ class ChatApp:
             info.update(joined=False, members=max(0, info["members"] - 1))
             self.add_line(f"You left #{name}.", "system", conversation=(ROOM, name))
             self._refresh_sidebar()
+        elif request_type == "ADMIN":
+            self.add_line(f"Done: {data.get('action')} {data.get('target')}", "system")
         elif request_type == "HISTORY":
             self._show_history(data)
         elif request_type == "MSG" and status == "STORED_NOT_DELIVERED":
@@ -510,9 +534,11 @@ class ChatApp:
             if (USER, user) in self.lines:
                 self.add_line(f"{user} is now {data.get('status')}.", "system", conversation=(USER, user))
             self._refresh_sidebar()
-        elif kind == "room" and data.get("action") == "created":
-            self.rooms.setdefault(data["room"], {"joined": False, "members": 1, "status": "OPEN"})
-            self._refresh_sidebar()
+        elif kind == "room":
+            self._room_changed(data)
+        elif kind == "account":
+            status = data.get("status", "").lower()
+            self._back_to_login(f"Your account was {status} by an administrator.")
         elif kind in ("join", "leave"):
             name, user = data.get("room"), data.get("user")
             info = self.rooms.setdefault(name, {"joined": True, "members": 0, "status": "OPEN"})
@@ -520,6 +546,30 @@ class ChatApp:
             verb = "joined" if kind == "join" else "left"
             self.add_line(f"{user} {verb} the room.", "system", conversation=(ROOM, name))
             self._refresh_sidebar()
+
+    def _room_changed(self, data):
+        action, name = data.get("action"), data.get("room")
+        if action == "created":
+            self.rooms.setdefault(name, {"joined": False, "members": 1, "status": "OPEN"})
+        elif action in ("restricted", "opened") and name in self.rooms:
+            self.rooms[name]["status"] = "RESTRICTED" if action == "restricted" else "OPEN"
+            note = "is now read-only" if action == "restricted" else "is open again"
+            self.add_line(f"#{name} {note}.", "system", conversation=(ROOM, name))
+        elif action == "removed":
+            self.rooms.pop(name, None)
+            self.add_line(f"#{name} was removed by an administrator.", "warning", conversation=(ROOM, name))
+        elif action == "renamed" and name in self.rooms:
+            new = data.get("name")
+            self.rooms[new] = self.rooms.pop(name)
+            old_key, new_key = (ROOM, name), (ROOM, new)
+            if old_key in self.lines:
+                self.lines[new_key] = self.lines.pop(old_key)
+            self.history_requested = {new_key if c == old_key else c for c in self.history_requested}
+            if self.current == old_key:
+                self.current = new_key
+                self.title_var.set(conversation_title(new_key))
+            self.add_line(f"#{name} was renamed to #{new}.", "system", conversation=new_key)
+        self._refresh_sidebar()
 
     def _show_history(self, data):
         conversation = (ROOM, data["room"]) if "room" in data else (USER, data["with"])

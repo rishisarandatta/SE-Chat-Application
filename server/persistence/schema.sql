@@ -1,5 +1,4 @@
 -- Tables: User, ChatRoom, RoomMember, Message, Session, AuditLog (see SAD)
--- AuditLog is added with audit logging (#10).
 
 CREATE TABLE IF NOT EXISTS User (
     UserID       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,3 +54,24 @@ CREATE TABLE IF NOT EXISTS Message (
 
 CREATE INDEX IF NOT EXISTS idx_message_room ON Message(RoomID, Timestamp);
 CREATE INDEX IF NOT EXISTS idx_message_direct ON Message(SenderID, RecipientID, Timestamp);
+
+-- Security and administrative events. Insert-only: the triggers below reject any
+-- UPDATE or DELETE, so a record cannot be changed once written (CHAT-SR-005).
+CREATE TABLE IF NOT EXISTS AuditLog (
+    AuditID   INTEGER PRIMARY KEY AUTOINCREMENT,
+    UserID    INTEGER REFERENCES User(UserID),
+    Action    TEXT    NOT NULL,
+    Entity    TEXT,
+    Outcome   TEXT    NOT NULL,
+    Timestamp TEXT    NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON AuditLog
+BEGIN
+    SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON AuditLog
+BEGIN
+    SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
