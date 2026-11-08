@@ -48,12 +48,16 @@ class ChatServer:
         self.connections.serve_forever()
 
     def _expire_sessions_loop(self):
-        """Periodically expire inactive sessions."""
+        """Periodically expire inactive sessions and close their connections."""
         timeout = self.config["idle_timeout_seconds"]
         interval = min(30, max(1, timeout // 4))
 
         while not self._expiry_stop.wait(interval):
-            self.sessions.expire_idle_sessions()
+            expired_session_ids = (
+                self.sessions.expire_idle_sessions_with_ids()
+            )
+
+            self.connections.close_expired_sessions(expired_session_ids)
 
     def start(self):
         """Start the server and session-expiry worker."""

@@ -151,6 +151,8 @@ class Repository:
             current_time - timedelta(seconds=idle_timeout_seconds)
         ).isoformat(timespec="milliseconds")
 
+        timestamp = current_time.isoformat(timespec="milliseconds")
+
         with self._lock:
             cur = self._db.execute(
                 """
@@ -159,7 +161,48 @@ class Repository:
                 WHERE DisconnectedAt IS NULL
                   AND LastActivity < ?
                 """,
-                (now(), cutoff),
+                (timestamp, cutoff),
             )
 
         return cur.rowcount
+
+    def expire_idle_sessions_with_ids(self, idle_timeout_seconds):
+        """
+        Expire inactive sessions and return their session IDs.
+
+        The selection and update are performed under the same lock
+        to prevent concurrent activity refreshes from racing with expiry.
+        """
+        current_time = datetime.now(timezone.utc)
+
+        cutoff = (
+            current_time - timedelta(seconds=idle_timeout_seconds)
+        ).isoformat(timespec="milliseconds")
+
+        timestamp = current_time.isoformat(timespec="milliseconds")
+
+        with self._lock:
+            rows = self._db.execute(
+                """
+                SELECT SessionID
+                FROM Session
+                WHERE DisconnectedAt IS NULL
+                  AND LastActivity < ?
+                """,
+                (cutoff,),
+            ).fetchall()
+
+            session_ids = [row["SessionID"] for row in rows]
+
+            if session_ids:
+                self._db.execute(
+                    """
+                    UPDATE Session
+                    SET DisconnectedAt = ?
+                    WHERE DisconnectedAt IS NULL
+                      AND LastActivity < ?
+                    """,
+                    (timestamp, cutoff),
+                )
+
+        return session_ids

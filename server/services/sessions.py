@@ -64,3 +64,9 @@ class SessionService:
         return self.repo.expire_idle_sessions(
             self.idle_timeout_seconds
         )
+
+    def expire_idle_sessions_with_ids(self):
+        """Expire inactive sessions and return their session IDs."""
+        return self.repo.expire_idle_sessions_with_ids(
+            self.idle_timeout_seconds
+        )
