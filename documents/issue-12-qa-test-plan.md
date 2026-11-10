@@ -109,7 +109,7 @@ After a defect is fixed:
 
 ## 10. Roles and Responsibilities
 
-**QA Lead – Rishi Sar an Datta**
+**QA Lead – Rishi Saran Datta**
 
 - Define test scope and acceptance criteria.
 - Prepare test cases and requirement traceability.
