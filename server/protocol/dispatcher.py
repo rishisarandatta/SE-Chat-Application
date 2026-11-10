@@ -44,7 +44,11 @@ class Dispatcher:
             return
 
         # Validate protected requests.
-        if request.type not in PRE_LOGIN_TYPES:
+        # Authenticated PING requests must also refresh session activity.
+        if (
+            request.type not in PRE_LOGIN_TYPES
+            or (request.type == "PING" and conn.authenticated)
+        ):
 
             # First check whether the presented token is correct.
             # An incorrect token must not destroy an otherwise valid session.
