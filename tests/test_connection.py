@@ -221,3 +221,36 @@ def test_authenticated_ping_refreshes_session_activity(
     client.close()
 
 
+def test_authenticated_client_disconnect_preserves_other_session(
+    make_server,
+    connect,
+):
+    server, address = make_server()
+
+    alice = connect(address).sign_in("alice_recovery", "Test@12345")
+    bob = connect(address).sign_in("bob_recovery", "Test@12345")
+
+    try:
+        assert wait_for(
+            lambda: server.connections.connection_count() == 2
+        )
+
+        # Alice disconnects unexpectedly during a frame header.
+        alice.sock.sendall(b"\x00\x00")
+        alice.close()
+
+        assert wait_for(
+            lambda: server.connections.connection_count() == 1
+        )
+
+        # Bob's authenticated session must remain usable.
+        seq = bob.request("PING")
+        reply = bob.reply_to(seq)
+
+        assert reply["type"] == "PONG"
+        assert reply["ref_seq"] == seq
+
+    finally:
+        alice.close()
+        bob.close()
+
