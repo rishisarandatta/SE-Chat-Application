@@ -1,4 +1,3 @@
-
 """Accept loop, per-client reader/writer threads, connection cap, cleanup on disconnect."""
 
 import itertools
@@ -123,6 +122,24 @@ class ConnectionManager:
         with self._lock:
             return len(self._connections)
 
+    def close_expired_sessions(self, expired_session_ids):
+        """Close connections belonging to expired sessions."""
+        expired_session_ids = set(expired_session_ids)
+
+        if not expired_session_ids:
+            return
+
+        with self._lock:
+            connections = [
+                conn
+                for conn in self._connections.values()
+                if conn.session is not None
+                and conn.session.id in expired_session_ids
+            ]
+
+        for conn in connections:
+            conn.close()
+
     def serve_forever(self):
         """Start a TLS listener and accept client connections."""
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -177,8 +194,7 @@ class ConnectionManager:
         """Enforce the connection cap and establish TLS for clients."""
         sock.settimeout(self.read_timeout)
 
-        # Check capacity before TLS negotiation. If full, negotiate TLS
-        # so the client can receive a framed SERVER_BUSY response.
+        # Check capacity before TLS negotiation.
         with self._lock:
             busy = len(self._connections) >= self.max_connections
 
@@ -369,6 +385,7 @@ class ConnectionManager:
         conn.close()
 
     def _cleanup(self, conn, reason):
+        """Remove the connection and notify the dispatcher."""
         conn.close()
 
         with self._lock:

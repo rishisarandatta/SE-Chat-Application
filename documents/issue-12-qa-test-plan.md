@@ -1,11 +1,11 @@
-﻿# QA Test Planning and Validation Document
-## SE Chat Application ΓÇô Issue #12
+# QA Test Planning and Validation Document
+## SE Chat Application – Issue #12
 
-**Prepared by:** THAI Rishi Saran Datta ΓÇô QA Lead  
+**Prepared by:** Rishi Saran Datta – QA Lead  
 **Test Engineer:** Abhishek B K Hanapur  
 **Issue:** Test Performance, Concurrency and Disconnection Recovery  
 **Story Points:** 8  
-**Planned Sprint:** Sprint 2 (26ΓÇô30 October 2026)
+**Planned Sprint:** Sprint 2 (26–30 October 2026)
 
 ---
 
@@ -27,7 +27,7 @@ The following areas are included:
 
 ## 3. Test Strategy
 
-Testing will use the applicationΓÇÖs actual client-server communication and the submitted Software Test Plan.
+Testing will use the application’s actual client-server communication and the submitted Software Test Plan.
 
 - Performance testing: Measure message delivery time under normal load.
 - Concurrency testing: Verify communication between at least 50 authenticated clients.
@@ -109,7 +109,7 @@ After a defect is fixed:
 
 ## 10. Roles and Responsibilities
 
-**QA Lead ΓÇô Rishi Sar an Datta**
+**QA Lead – Rishi Saran Datta**
 
 - Define test scope and acceptance criteria.
 - Prepare test cases and requirement traceability.
@@ -118,7 +118,7 @@ After a defect is fixed:
 - Maintain defect and retest records.
 - Prepare the final QA summary.
 
-**Test Engineer ΓÇô Abhishek B K Hanapur**
+**Test Engineer – Abhishek B K Hanapur**
 
 - Develop and execute automated test scenarios.
 - Perform latency and concurrency measurements.
