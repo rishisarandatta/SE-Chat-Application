@@ -180,3 +180,101 @@ def test_two_client_network_handlers_chat(server_address):
     finally:
         a.close()
         b.close()
+
+def test_50_authenticated_clients_concurrent_delivery_latency(connect):
+    client_count = 50
+    clients = []
+    sent_at = {}
+    latencies = []
+    errors = []
+    lock = threading.Lock()
+    start_senders = threading.Event()
+
+    try:
+        for i in range(client_count):
+            client = connect().sign_in(f"loaduser{i}")
+            clients.append(client)
+
+        def sender(i):
+            try:
+                start_senders.wait(timeout=10)
+                recipient = f"loaduser{(i + 1) % client_count}"
+
+                with lock:
+                    sent_at[f"loaduser{i}"] = time.perf_counter()
+
+                send(clients[i], recipient, f"load message {i}")
+
+            except Exception as exc:
+                with lock:
+                    errors.append(f"Sender {i}: {exc}")
+
+        def receiver(i):
+            try:
+                expected_sender = f"loaduser{(i - 1) % client_count}"
+
+                while True:
+                    event = clients[i].recv()
+                    if event.get("type") == "EVENT":
+                        assert event.get("kind") == "msg"
+                        break
+
+                assert event["data"]["from"] == expected_sender
+                assert event["data"]["text"] == (
+                    f"load message {(i - 1) % client_count}"
+                )
+
+                received_at = time.perf_counter()
+
+                with lock:
+                    latency = received_at - sent_at[expected_sender]
+                    latencies.append(latency)
+
+            except Exception as exc:
+                with lock:
+                    errors.append(f"Receiver {i}: {exc}")
+
+        receiver_threads = [
+            threading.Thread(target=receiver, args=(i,))
+            for i in range(client_count)
+        ]
+
+        for thread in receiver_threads:
+            thread.start()
+
+        sender_threads = [
+            threading.Thread(target=sender, args=(i,))
+            for i in range(client_count)
+        ]
+
+        for thread in sender_threads:
+            thread.start()
+
+        start_senders.set()
+
+        for thread in sender_threads:
+            thread.join(timeout=15)
+
+        for thread in receiver_threads:
+            thread.join(timeout=15)
+
+        assert all(not thread.is_alive() for thread in sender_threads)
+        assert all(not thread.is_alive() for thread in receiver_threads)
+        assert not errors, errors
+        assert len(latencies) == client_count
+
+        sorted_latencies = sorted(latencies)
+        p90 = sorted_latencies[
+            (90 * client_count + 99) // 100 - 1
+        ]
+
+        print(f"\nClients: {client_count}")
+        print(f"Messages delivered: {len(latencies)}")
+        print(f"Average latency: {sum(latencies) / len(latencies):.4f} seconds")
+        print(f"P90 latency: {p90:.4f} seconds")
+
+        assert p90 <= 1.0, f"P90 latency exceeded 1 second: {p90:.4f}s"
+
+    finally:
+        for client in clients:
+            client.close()
