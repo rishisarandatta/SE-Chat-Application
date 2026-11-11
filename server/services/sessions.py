@@ -1,9 +1,6 @@
-"""Session tokens, last activity, idle-session sweeper.
 
-A session starts on login: the client gets a random token that it must send with
-every later request, and only a SHA-256 hash of it is stored. Idle expiry and the
-sweeper come with secure session management (#11).
-"""
+"""Secure session tokens and idle-session expiry."""
+
 import hashlib
 import hmac
 import secrets
@@ -16,18 +13,60 @@ class Session(NamedTuple):
 
 
 class SessionService:
-    def __init__(self, repo):
+    def __init__(self, repo, idle_timeout_seconds=900):
         self.repo = repo
+        self.idle_timeout_seconds = idle_timeout_seconds
 
     def start(self, user_id):
+        """Create a new session with a cryptographically secure token."""
         token = secrets.token_urlsafe(32)
-        session_id = self.repo.create_session(user_id, hashlib.sha256(token.encode()).hexdigest())
+
+        # Store only the SHA-256 hash of the token.
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+        session_id = self.repo.create_session(user_id, token_hash)
+
         return Session(session_id, token)
 
     def end(self, session):
-        self.repo.end_session(session.id)
+        """End an active session."""
+        if session is not None:
+            self.repo.end_session(session.id)
 
     @staticmethod
     def matches(session, presented_token):
-        return (session is not None and isinstance(presented_token, str)
-                and hmac.compare_digest(session.token.encode(), presented_token.encode()))
+        """Compare session tokens safely."""
+        return (
+            session is not None
+            and isinstance(presented_token, str)
+            and hmac.compare_digest(
+                session.token.encode(),
+                presented_token.encode(),
+            )
+        )
+
+    def validate(self, session, presented_token):
+        """
+        Validate the token and refresh activity.
+
+        An expired or disconnected session is rejected.
+        """
+        if not self.matches(session, presented_token):
+            return False
+
+        return self.repo.refresh_session_activity(
+            session.id,
+            self.idle_timeout_seconds,
+        )
+
+    def expire_idle_sessions(self):
+        """Expire sessions that have exceeded the idle timeout."""
+        return self.repo.expire_idle_sessions(
+            self.idle_timeout_seconds
+        )
+
+    def expire_idle_sessions_with_ids(self):
+        """Expire inactive sessions and return their session IDs."""
+        return self.repo.expire_idle_sessions_with_ids(
+            self.idle_timeout_seconds
+        )
