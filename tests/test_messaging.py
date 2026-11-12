@@ -86,13 +86,13 @@ def test_order_is_kept_per_sender_with_concurrent_senders(connect):
     assert len(by_sender) == 4
 
 
-def test_offline_recipient_gets_not_delivered_status(connect):
+def test_offline_recipient_gets_stored_not_delivered_status(connect):
     alice = connect().sign_in("alice")
     connect().sign_in("bob").close()
     time.sleep(0.2)
 
     ack = alice.reply_to(send(alice, "bob", "are you there?"))
-    assert ack["type"] == "ACK" and ack["status"] == "NOT_DELIVERED"
+    assert ack["type"] == "ACK" and ack["status"] == "STORED_NOT_DELIVERED"
     assert ack["data"]["reason"] == "bob is offline"
 
 

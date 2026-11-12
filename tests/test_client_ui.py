@@ -81,7 +81,7 @@ def test_register_chat_and_logout(root, server_address, connect):
     app.open_conversation(USER, "carol")
     app.text_var.set("anyone there?")
     app.send_message()
-    assert pump(root, lambda: "carol is offline" in chat_text(app))
+    assert pump(root, lambda: "carol is offline — your message was saved" in chat_text(app))
 
     app.logout()
     assert pump(root, lambda: app.login_frame.winfo_manager() == "pack")
@@ -164,3 +164,62 @@ def test_rooms_presence_and_unread_markers(root, server_address, connect):
     assert pump(root, lambda: "bob" not in app.online)
     app.open_conversation(USER, "bob")
     assert "bob is now offline." in chat_text(app)
+
+
+def test_history_loads_when_a_conversation_opens(root, server_address, connect):
+    alice_raw = connect().sign_in("alice")
+    alice_raw.close()
+    bob = connect().sign_in("bob")
+    bob.reply_to(bob.request("MSG", {"to": "alice", "text": "sent while you were away"}))
+
+    app = make_app(root, server_address, "alice")
+    app.login()
+    assert pump(root, lambda: app.username == "alice")
+    app.open_conversation(USER, "bob")
+    assert pump(root, lambda: "sent while you were away" in chat_text(app))
+
+    # A live message is not duplicated by a second history load.
+    bob.request("MSG", {"to": "alice", "text": "and now live"})
+    assert pump(root, lambda: "and now live" in chat_text(app))
+    app.open_conversation(USER, "bob")
+    root.update()
+    assert chat_text(app).count("sent while you were away") == 1
+    assert chat_text(app).count("and now live") == 1
+
+
+def test_admin_commands_and_being_deactivated(root, make_server, connect):
+    server, address = make_server()
+    first = connect(address)
+    first.reply_to(first.request("REGISTER", {"username": "root", "password": "password-123"}))
+    server.repo.set_user_role("root", "ADMIN")
+    bob = connect(address).sign_in("bob")
+    bob.reply_to(bob.request("CREATE_ROOM", {"room": "general"}))
+
+    app = make_app(root, address, "root")
+    app.login()
+    assert pump(root, lambda: app.username == "root")
+    assert app.status_var.get() == "Connected as root (administrator)"
+
+    app.text_var.set("/admin rename_room general lobby")
+    app.send_message()
+    assert pump(root, lambda: "lobby" in app.rooms and "general" not in app.rooms)
+
+    app.text_var.set("/admin deactivate bob")
+    app.send_message()
+    assert pump(root, lambda: "Done: deactivate bob" in chat_text(app))
+    assert bob.next_event("account")["data"]["status"] == "DEACTIVATED"
+
+
+def test_client_returns_to_login_when_deactivated(root, make_server, connect):
+    server, address = make_server()
+    first = connect(address)
+    first.reply_to(first.request("REGISTER", {"username": "root", "password": "password-123"}))
+    server.repo.set_user_role("root", "ADMIN")
+    admin_client = connect(address).sign_in("root")
+
+    app = make_app(root, address, "alice")
+    app.register()
+    assert pump(root, lambda: app.username == "alice")
+    admin_client.reply_to(admin_client.request("ADMIN", {"action": "deactivate", "target": "alice"}))
+    assert pump(root, lambda: app.login_frame.winfo_manager() == "pack")
+    assert app.login_message.cget("text") == "Your account was deactivated by an administrator."

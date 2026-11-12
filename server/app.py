@@ -3,8 +3,10 @@
 
 import threading
 
+from server.audit.audit_logger import AuditLogger
 from server.persistence.repository import Repository
 from server.protocol.dispatcher import Dispatcher
+from server.services.admin import AdminService
 from server.services.auth import AuthService
 from server.services.presence import Presence
 from server.services.rooms import RoomService
@@ -18,6 +20,7 @@ class ChatServer:
         self.config = config
         self.repo = Repository(config["db_path"])
         self.presence = Presence()
+        self.audit = AuditLogger(self.repo)
         self.rooms = RoomService(self.repo, self.presence, config["max_rooms"])
 
         # Session service with configured idle timeout.
@@ -28,12 +31,15 @@ class ChatServer:
 
         self.dispatcher = Dispatcher(
             config,
-            auth=AuthService(self.repo),
+            auth=AuthService(self.repo, self.audit),
             sessions=self.sessions,
             presence=self.presence,
             router=Router(self.presence, self.repo, self.rooms),
             rooms=self.rooms,
+            audit=self.audit,
         )
+        self.dispatcher.admin = AdminService(
+            self.repo, self.presence, self.rooms, self.audit, self.dispatcher.end_session)
 
         self.connections = ConnectionManager(
             config,
