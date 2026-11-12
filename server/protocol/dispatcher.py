@@ -18,6 +18,7 @@ class Dispatcher:
         self.sessions = sessions
         self.presence = presence
         self.router = router
+        self.rooms = rooms
 
         self._handlers = {
             "PING": self._ping,
@@ -180,6 +181,8 @@ class Dispatcher:
                     "session": conn.session.token,
                     "username": user["username"],
                     "role": user["role"],
+                    "online": self.presence.online_users(),
+                    "rooms": self.rooms.room_list(user),
                 },
             )
         )

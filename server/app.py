@@ -18,6 +18,7 @@ class ChatServer:
         self.config = config
         self.repo = Repository(config["db_path"])
         self.presence = Presence()
+        self.rooms = RoomService(self.repo, self.presence, config["max_rooms"])
 
         # Session service with configured idle timeout.
         self.sessions = SessionService(
