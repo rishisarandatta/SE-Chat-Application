@@ -7,6 +7,7 @@ from server.persistence.repository import Repository
 from server.protocol.dispatcher import Dispatcher
 from server.services.auth import AuthService
 from server.services.presence import Presence
+from server.services.rooms import RoomService
 from server.services.router import Router
 from server.services.sessions import SessionService
 from server.transport.connection_manager import ConnectionManager
@@ -17,6 +18,7 @@ class ChatServer:
         self.config = config
         self.repo = Repository(config["db_path"])
         self.presence = Presence()
+        self.rooms = RoomService(self.repo, self.presence, config["max_rooms"])
 
         # Session service with configured idle timeout.
         self.sessions = SessionService(
@@ -29,7 +31,8 @@ class ChatServer:
             auth=AuthService(self.repo),
             sessions=self.sessions,
             presence=self.presence,
-            router=Router(self.presence, self.repo),
+            router=Router(self.presence, self.repo, self.rooms),
+            rooms=self.rooms,
         )
 
         self.connections = ConnectionManager(
