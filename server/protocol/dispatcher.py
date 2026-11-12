@@ -18,6 +18,9 @@ class Dispatcher:
         self.sessions = sessions
         self.presence = presence
         self.router = router
+        self.rooms = rooms
+        self.audit = audit
+        self.admin = None  # AdminService, set by ChatServer (it needs end_session)
 
         self._handlers = {
             "PING": self._ping,
@@ -72,7 +75,7 @@ class Dispatcher:
             if not self.sessions.validate(conn.session, request.session):
                 log.info("%r session expired", conn)
 
-                self._end_session(conn)
+                self.end_session(conn, "expired")
 
                 conn.send(
                     messages.error(
@@ -182,6 +185,8 @@ class Dispatcher:
                     "session": conn.session.token,
                     "username": user["username"],
                     "role": user["role"],
+                    "online": self.presence.online_users(),
+                    "rooms": self.rooms.room_list(user),
                 },
             )
         )
@@ -189,7 +194,7 @@ class Dispatcher:
     def _logout(self, conn, request):
         log.info("%r logged out", conn)
 
-        self._end_session(conn)
+        self.end_session(conn, "logout")
 
         conn.send(messages.ack(request.seq, "LOGGED_OUT"))
         conn.close_after_flush()
@@ -197,14 +202,48 @@ class Dispatcher:
     def _msg(self, conn, request):
         conn.send(self.router.route(conn, request))
 
-    def _end_session(self, conn):
-        """Remove the user's presence and end their database session."""
+    def _admin(self, conn, request):
+        conn.send(self.admin.handle(conn, request))
 
-        if conn.user is not None:
-            self.presence.remove(conn.user["username"], conn)
+    def _history(self, conn, request):
+        conn.send(self.router.history(conn.user, request))
+
+    def _create_room(self, conn, request):
+        try:
+            room = self.rooms.create(conn.user, request.payload["room"])
+        except RoomError as e:
+            conn.send(messages.error(request.seq, e.code, e.reason))
+            return
+        self.audit.record("create_room", "success", user=conn.user, entity=room["RoomName"])
+        conn.send(messages.ack(request.seq, "CREATED", {"room": room["RoomName"], "members": [conn.user["username"]]}))
+
+    def _join(self, conn, request):
+        try:
+            room = self.rooms.join(conn.user, request.payload["room"])
+        except RoomError as e:
+            conn.send(messages.error(request.seq, e.code, e.reason))
+            return
+        self.audit.record("join_room", "success", user=conn.user, entity=room["RoomName"])
+        conn.send(messages.ack(request.seq, "JOINED", {"room": room["RoomName"], "members": self.rooms.members(room)}))
+
+    def _leave(self, conn, request):
+        try:
+            room = self.rooms.leave(conn.user, request.payload["room"])
+        except RoomError as e:
+            conn.send(messages.error(request.seq, e.code, e.reason))
+            return
+        self.audit.record("leave_room", "success", user=conn.user, entity=room["RoomName"])
+        conn.send(messages.ack(request.seq, "LEFT", {"room": room["RoomName"]}))
+
+    def end_session(self, conn, reason="disconnected"):
+        """Take the user offline and end their database session. Safe to call more than once."""
+        user = conn.user
+
+        if user is not None:
+            self.presence.remove(user["username"], conn)
             conn.user = None
 
         if conn.session is not None:
             self.sessions.end(conn.session)
             conn.session = None
-            self.audit.record("session_end", reason, user=conn.user)
+            self.audit.record("session_end", reason, user=user)
