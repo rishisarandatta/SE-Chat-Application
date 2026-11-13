@@ -86,13 +86,13 @@ def test_order_is_kept_per_sender_with_concurrent_senders(connect):
     assert len(by_sender) == 4
 
 
-def test_offline_recipient_gets_not_delivered_status(connect):
+def test_offline_recipient_gets_stored_not_delivered_status(connect):
     alice = connect().sign_in("alice")
     connect().sign_in("bob").close()
     time.sleep(0.2)
 
     ack = alice.reply_to(send(alice, "bob", "are you there?"))
-    assert ack["type"] == "ACK" and ack["status"] == "NOT_DELIVERED"
+    assert ack["type"] == "ACK" and ack["status"] == "STORED_NOT_DELIVERED"
     assert ack["data"]["reason"] == "bob is offline"
 
 
@@ -107,7 +107,7 @@ def test_cannot_message_yourself(connect):
     assert alice.reply_to(send(alice, "Alice", "me"))["code"] == "INVALID_MESSAGE"
 
 
-def test_room_messages_not_available_yet(connect):
+def test_room_message_needs_membership(connect):
     alice = connect().sign_in("alice")
     reply = alice.reply_to(
         alice.request("MSG", {"room": "general", "text": "hi"})
@@ -136,6 +136,14 @@ def test_invalid_message_is_rejected_and_others_unaffected(connect):
     seq = send(alice, "bob", "still working")
     assert bob.recv()["data"]["text"] == "still working"
     assert alice.reply_to(seq)["status"] == "DELIVERED"
+
+
+def next_non_notification(inbox):
+    """Next item from a client inbox, skipping presence and room notifications."""
+    while True:
+        item = inbox.get(timeout=5)
+        if item[0] != "message" or item[1].get("kind") not in ("presence", "room", "join", "leave"):
+            return item
 
 
 def test_two_client_network_handlers_chat(server_address):
@@ -171,12 +179,110 @@ def test_two_client_network_handlers_chat(server_address):
             {"to": "bob", "text": "hello from a real client"},
         )
 
-        _, ack, request_type = inbox_a.get(timeout=5)
+        _, ack, request_type = next_non_notification(inbox_a)
         assert (request_type, ack["status"]) == ("MSG", "DELIVERED")
 
-        _, event, _ = inbox_b.get(timeout=5)
+        _, event, _ = next_non_notification(inbox_b)
         assert event["data"]["text"] == "hello from a real client"
 
     finally:
         a.close()
         b.close()
+
+def test_50_authenticated_clients_concurrent_delivery_latency(connect):
+    client_count = 50
+    clients = []
+    sent_at = {}
+    latencies = []
+    errors = []
+    lock = threading.Lock()
+    start_senders = threading.Event()
+
+    try:
+        for i in range(client_count):
+            client = connect().sign_in(f"loaduser{i}")
+            clients.append(client)
+
+        def sender(i):
+            try:
+                start_senders.wait(timeout=10)
+                recipient = f"loaduser{(i + 1) % client_count}"
+
+                with lock:
+                    sent_at[f"loaduser{i}"] = time.perf_counter()
+
+                send(clients[i], recipient, f"load message {i}")
+
+            except Exception as exc:
+                with lock:
+                    errors.append(f"Sender {i}: {exc}")
+
+        def receiver(i):
+            try:
+                expected_sender = f"loaduser{(i - 1) % client_count}"
+
+                while True:
+                    event = clients[i].recv()
+                    if event.get("type") == "EVENT":
+                        assert event.get("kind") == "msg"
+                        break
+
+                assert event["data"]["from"] == expected_sender
+                assert event["data"]["text"] == (
+                    f"load message {(i - 1) % client_count}"
+                )
+
+                received_at = time.perf_counter()
+
+                with lock:
+                    latency = received_at - sent_at[expected_sender]
+                    latencies.append(latency)
+
+            except Exception as exc:
+                with lock:
+                    errors.append(f"Receiver {i}: {exc}")
+
+        receiver_threads = [
+            threading.Thread(target=receiver, args=(i,))
+            for i in range(client_count)
+        ]
+
+        for thread in receiver_threads:
+            thread.start()
+
+        sender_threads = [
+            threading.Thread(target=sender, args=(i,))
+            for i in range(client_count)
+        ]
+
+        for thread in sender_threads:
+            thread.start()
+
+        start_senders.set()
+
+        for thread in sender_threads:
+            thread.join(timeout=15)
+
+        for thread in receiver_threads:
+            thread.join(timeout=15)
+
+        assert all(not thread.is_alive() for thread in sender_threads)
+        assert all(not thread.is_alive() for thread in receiver_threads)
+        assert not errors, errors
+        assert len(latencies) == client_count
+
+        sorted_latencies = sorted(latencies)
+        p90 = sorted_latencies[
+            (90 * client_count + 99) // 100 - 1
+        ]
+
+        print(f"\nClients: {client_count}")
+        print(f"Messages delivered: {len(latencies)}")
+        print(f"Average latency: {sum(latencies) / len(latencies):.4f} seconds")
+        print(f"P90 latency: {p90:.4f} seconds")
+
+        assert p90 <= 1.0, f"P90 latency exceeded 1 second: {p90:.4f}s"
+
+    finally:
+        for client in clients:
+            client.close()
